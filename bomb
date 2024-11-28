@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>폭탄 드롭 게임</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            background: #000033;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        #gameInfo {
+            font-size: 20px;
+            margin-bottom: 10px;
+            color: #333;
+            text-align: center;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin: 10px;
+        }
+        button {
+            font-size: 18px;
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameInfo">
+        <div>점수: 0 | 생명력: 3 | 스테이지: 1</div>
+        <div id="bossInfo" style="display: none;">보스 체력: 5</div>
+    </div>
+    <div class="controls">
+        <button onclick="toggleGame()">시작/일시정지</button>
+        <button onclick="resetGame()">다시 시작</button>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameInfo = document.getElementById('gameInfo');
+        const bossInfo = document.getElementById('bossInfo');
+
+        canvas.width = 480;
+        canvas.height = 600;
+
+        // 게임 상태
+        let gameRunning = false;
+        let score = 0;
+        let lives = 3;
+        let stage = 1;
+        let enemiesDefeated = 0;
+        let bossActive = false;
+        let boss = null;
+
+        // 게임 설정
+        const enemiesForBoss = 15;
+        let enemySpeed = 1;
+        let enemySpawnRate = 0.02;
+        let scorePerKill = 0.1;
+
+        // 플레이어
+        const player = {
+            x: canvas.width / 2,
+            width: 40,
+            height: 20,
+            speed: 5
+        };
+
+        // 게임 요소 배열
+        const bombs = [];
+        const enemies = [];
+        const explosions = [];
+
+        // 게임 시작/정지 토글
+        function toggleGame() {
+            gameRunning = !gameRunning;
+            if (gameRunning) {
+                gameLoop();
+            }
+        }
+
+        // 게임 초기화
+        function resetGame() {
+            score = 0;
+            lives = 3;
+            stage = 1;
+            enemiesDefeated = 0;
+            bossActive = false;
+            boss = null;
+            enemySpeed = 1;
+            enemySpawnRate = 0.02;
+            scorePerKill = 0.1;
+            enemies.length = 0;
+            bombs.length = 0;
+            explosions.length = 0;
+            player.x = canvas.width / 2;
+            gameRunning = false;
+            updateGameInfo();
+            bossInfo.style.display = 'none';
+        }
+
+        // 폭발 효과 클래스
+        class Explosion {
+            constructor(x, y, size = 1) {
+                this.x = x;
+                this.y = y;
+                this.radius = 1;
+                this.maxRadius = 20 * size;
+                this.growth = 2 * size;
+                this.alpha = 1;
+            }
+
+            update() {
+                if (this.radius < this.maxRadius) {
+                    this.radius += this.growth;
+                }
+                this.alpha = Math.max(0, this.alpha - 0.05);
+                return this.alpha > 0;
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                const gradient = ctx.createRadialGradient(
+                    this.x, this.y, 0,
+                    this.x, this.y, this.radius
+                );
+                gradient.addColorStop(0, '#ffff00');
+                gradient.addColorStop(0.5, '#ff6600');
+                gradient.addColorStop(1, 'rgba(255, 0, 0, 0)');
+                ctx.fillStyle = gradient;
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // 보스 클래스
+        class Boss {
+            constructor() {
+                this.width = 100;
+                this.height = 100;
+                this.x = canvas.width / 2 - this.width / 2;
+                this.y = canvas.height;
+                this.health = 5 + (stage - 1);
+                this.maxHealth = this.health;
+                this.direction = 1;
+                this.horizontalSpeed = 2;
+                this.verticalSpeed = enemySpeed * 0.8;
+            }
+
+            update() {
+                this.x += this.horizontalSpeed * this.direction;
+                if (this.x <= 0 || this.x + this.width >= canvas.width) {
+                    this.direction *= -1;
+                }
+                
+                this.y -= this.verticalSpeed;
+                
+                if (this.y < 0) {
+                    lives = 0;
+                    gameRunning = false;
+                    alert(`보스가 통과했습니다!\n최종 점수: ${score.toFixed(1)}\n도달 스테이지: ${stage}`);
+                    resetGame();
+                }
+            }
+
+            draw() {
+                ctx.fillStyle = '#ff0000';
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                
+                const healthBarWidth = this.width;
+                const healthBarHeight = 10;
+                ctx.fillStyle = '#333333';
+                ctx.fillRect(this.x, this.y - 20, healthBarWidth, healthBarHeight);
+                ctx.fillStyle = '#00ff00';
+                ctx.fillRect(this.x, this.y - 20, 
+                    (this.health / this.maxHealth) * healthBarWidth, healthBarHeight);
+            }
+        }
+
+        // 이벤트 리스너
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') player.x = Math.max(0, player.x - player.speed);
+            if (e.key === 'ArrowRight') player.x = Math.min(canvas.width - player.width, player.x + player.speed);
+            if (e.key === ' ') dropBomb();
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            player.x = Math.max(0, Math.min(canvas.width - player.width, mouseX - player.width / 2));
+        });
+
+        canvas.addEventListener('click', dropBomb);
+
+        function dropBomb() {
+            if (!gameRunning) return;
+            bombs.push({
+                x: player.x + player.width / 2,
+                y: 50,
+                radius: 5
+            });
+        }
+
+        function createEnemy() {
+            if (bossActive) return;
+            enemies.push({
+                x: Math.random() * (canvas.width - 30),
+                y: canvas.height,
+                width: 30,
+                height: 30
+            });
+        }
+
+        function checkCollisions() {
+            if (bossActive && boss) {
+                for (let i = bombs.length - 1; i >= 0; i--) {
+                    const bomb = bombs[i];
+                    if (bomb.x > boss.x && bomb.x < boss.x + boss.width &&
+                        bomb.y > boss.y && bomb.y < boss.y + boss.height) {
+                        explosions.push(new Explosion(bomb.x, bomb.y, 2));
+                        boss.health--;
+                        bombs.splice(i, 1);
+                        
+                        if (boss.health <= 0) {
+                            for (let j = 0; j < 5; j++) {
+                                const randX = boss.x + Math.random() * boss.width;
+                                const randY = boss.y + Math.random() * boss.height;
+                                explosions.push(new Explosion(randX, randY, 3));
+                            }
+                            bossActive = false;
+                            boss = null;
+                            bossInfo.style.display = 'none';
+                            stage++;
+                            enemySpeed += 0.5;
+                            scorePerKill += 0.1;
+                            enemiesDefeated = 0;
+                            score += stage * 5;
+                        }
+                        updateGameInfo();
+                        break;
+                    }
+                }
+            }
+
+            for (let i = bombs.length - 1; i >= 0; i--) {
+                const bomb = bombs[i];
+                for (let j = enemies.length - 1; j >= 0; j--) {
+                    const enemy = enemies[j];
+                    const dx = bomb.x - (enemy.x + enemy.width/2);
+                    const dy = bomb.y - (enemy.y + enemy.height/2);
+                    if (Math.sqrt(dx*dx + dy*dy) < bomb.radius + enemy.width/2) {
+                        explosions.push(new Explosion(enemy.x + enemy.width/2, enemy.y + enemy.height/2));
+                        enemies.splice(j, 1);
+                        bombs.splice(i, 1);
+                        score += scorePerKill;
+                        enemiesDefeated++;
+                        
+                        if (enemiesDefeated >= enemiesForBoss && !bossActive) {
+                            bossActive = true;
+                            boss = new Boss();
+                            bossInfo.style.display = 'block';
+                        }
+                        
+                        updateGameInfo();
+                        break;
+                    }
+                }
+            }
+
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                if (enemies[i].y < 0) {
+                    enemies.splice(i, 1);
+                    lives--;
+                    if (lives <= 0) {
+                        alert(`게임 오버!\n최종 점수: ${score.toFixed(1)}\n도달 스테이지: ${stage}`);
+                        resetGame();
+                    }
+                    updateGameInfo();
+                }
+            }
+        }
+
+        function updateGameInfo() {
+            gameInfo.children[0].textContent = 
+                `점수: ${score.toFixed(1)} | 생명력: ${lives} | 스테이지: ${stage}`;
+            if (bossActive && boss) {
+                bossInfo.style.display = 'block';
+                bossInfo.textContent = `보스 체력: ${boss.health}/${boss.maxHealth}`;
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#4CAF50';
+            ctx.fillRect(player.x, 30, player.width, player.height);
+
+            if (bossActive && boss) {
+                boss.draw();
+            }
+
+            ctx.fillStyle = '#ff0000';
+            bombs.forEach(bomb => {
+                ctx.beginPath();
+                ctx.arc(bomb.x, bomb.y, bomb.radius, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            ctx.fillStyle = '#ff9900';
+            enemies.forEach(enemy => {
+                ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+            });
+
+            explosions.forEach((explosion, index) => {
+                if (!explosion.update()) {
+                    explosions.splice(index, 1);
+                } else {
+                    explosion.draw(ctx);
+                }
+            });
+        }
+
+        function update() {
+            if (bossActive && boss) {
+                boss.update();
+            }
+
+            bombs.forEach((bomb, i) => {
+                bomb.y += 3;
+                if (bomb.y > canvas.height) bombs.splice(i, 1);
+            });
+
+            enemies.forEach(enemy => {
+                enemy.y -= enemySpeed;
+            });
+
+            if (Math.random() < enemySpawnRate) {
+                createEnemy();
+            }
+
+            checkCollisions();
+        }
+
+        function gameLoop() {
+            if (gameRunning) {
+                update();
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+        }
+
+        resetGame();
+    </script>
+</body>
+</html>
